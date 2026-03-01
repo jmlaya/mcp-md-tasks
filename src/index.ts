@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { mkdir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';

@@ -29,19 +29,48 @@ Cards are stored as `.md` files organized in status folders inside a `.tasks/` d
 
 ---
 
-## Installation
-
-```bash
-git clone https://github.com/your-user/mcp-md-tasks.git
-cd mcp-md-tasks
-bun install
-```
-
----
-
 ## Integration with Claude Code
 
 Add the server to your project's `.claude/settings.local.json`:
+
+```json
+{
+  "mcpServers": {
+    "md-tasks": {
+      "command": "bunx",
+      "args": ["@jmlaya/mcp-md-tasks"]
+    }
+  }
+}
+```
+
+That's it. Bunx will download and run the package automatically — no local clone or absolute paths needed.
+
+### TASKS_ROOT (optional)
+
+By default the server creates `.tasks/` in the working directory of the agent's project (`process.cwd()`). To point to a different location, set the `TASKS_ROOT` env var to the full path of the desired `.tasks/` directory:
+
+```json
+{
+  "mcpServers": {
+    "md-tasks": {
+      "command": "bunx",
+      "args": ["@jmlaya/mcp-md-tasks"],
+      "env": {
+        "TASKS_ROOT": "/absolute/path/to/your/project/.tasks"
+      }
+    }
+  }
+}
+```
+
+### Local development
+
+If you cloned the repo and want to run the server from source:
+
+```bash
+bun install
+```
 
 ```json
 {
@@ -54,25 +83,7 @@ Add the server to your project's `.claude/settings.local.json`:
 }
 ```
 
-> **Tip:** Find your Bun path with `~/.bun/bin/bun --version` or check the output of `which bun`.
-
-### TASKS_ROOT (optional)
-
-By default the server creates `.tasks/` in the working directory of the agent's project (`process.cwd()`). If you need to point to a different location, set the `TASKS_ROOT` env var to the full path of the desired `.tasks/` directory:
-
-```json
-{
-  "mcpServers": {
-    "md-tasks": {
-      "command": "/home/your-user/.bun/bin/bun",
-      "args": ["run", "/absolute/path/to/mcp-md-tasks/src/index.ts"],
-      "env": {
-        "TASKS_ROOT": "/absolute/path/to/your/project/.tasks"
-      }
-    }
-  }
-}
-```
+> **Tip:** Find your Bun binary path with `echo $(which bun)` or `~/.bun/bin/bun`.
 
 ---
 

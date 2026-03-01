@@ -1,14 +1,20 @@
 {
-  "name": "mcp-md-tasks",
+  "name": "@jmlaya/mcp-md-tasks",
   "version": "1.0.0",
   "description": "MCP server for managing task cards in local markdown files",
   "type": "module",
   "bin": {
     "mcp-md-tasks": "./src/index.ts"
   },
+  "files": [
+    "src/"
+  ],
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
