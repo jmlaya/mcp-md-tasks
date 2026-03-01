@@ -1,6 +1,6 @@
 {
   "name": "@jmlaya/mcp-md-tasks",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP server for managing task cards in local markdown files",
   "type": "module",
   "bin": {
