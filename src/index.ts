@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 import { mkdir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -214,11 +215,33 @@ server.registerTool(
       title: z.string().describe('Card title (required)'),
       description: z.string().optional().describe('Card body/description in markdown'),
       due_date: z.string().optional().describe('Due date in ISO format YYYY-MM-DD'),
+      id: z
+        .string()
+        .optional()
+        .describe(
+          'Custom card ID (e.g. TASK-042). If omitted, one is auto-generated. Must not already exist in any status.',
+        ),
     },
   },
-  async ({ title, description, due_date }) => {
+  async ({ title, description, due_date, id: customId }) => {
     await ensureTasksDir();
-    const id = await nextId();
+
+    let id: string;
+    if (customId) {
+      // Validate that no card with this ID already exists in any status
+      for (const status of STATUS_FOLDERS) {
+        const filePath = join(TASKS_DIR, status, `${customId}.md`);
+        if (await Bun.file(filePath).exists()) {
+          return {
+            content: [{ type: 'text', text: `Error: Card with ID "${customId}" already exists in status "${status}"` }],
+          };
+        }
+      }
+      id = customId;
+    } else {
+      id = await nextId();
+    }
+
     const now = new Date().toISOString();
     const card: Card = {
       id,
