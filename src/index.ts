@@ -7,8 +7,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-const TASKS_DIR = process.env.TASKS_ROOT ?? join(process.cwd(), '.tasks');
-const CONFIG_PATH = join(TASKS_DIR, 'config.yaml');
+const TASKS_FOLDER = process.env.TASKS_FOLDER ?? '.tasks';
 
 const STATUS_FOLDERS = ['todo', 'in-progress', 'review', 'done', 'archived'] as const;
 type Status = (typeof STATUS_FOLDERS)[number];
@@ -37,7 +36,12 @@ interface Config {
   id_counter: number;
 }
 
-// ─── C: Config (manual key:value parse — no YAML library needed) ─────────────
+// ─── C: Path Helper ───────────────────────────────────────────────────────────
+function getTasksDir(workspacePath: string): string {
+  return join(workspacePath, TASKS_FOLDER);
+}
+
+// ─── D: Config (manual key:value parse — no YAML library needed) ─────────────
 function parseConfig(text: string): Config {
   const map: Record<string, string> = {};
   for (const line of text.trim().split('\n')) {
@@ -55,36 +59,36 @@ function serializeConfig(config: Config): string {
   return `id_prefix: ${config.id_prefix}\nid_counter: ${config.id_counter}\n`;
 }
 
-async function readConfig(): Promise<Config> {
-  const file = Bun.file(CONFIG_PATH);
+async function readConfig(tasksDir: string): Promise<Config> {
+  const file = Bun.file(join(tasksDir, 'config.yaml'));
   if (!(await file.exists())) return { id_prefix: 'TASK', id_counter: 1 };
   return parseConfig(await file.text());
 }
 
-async function writeConfig(config: Config): Promise<void> {
-  await Bun.write(CONFIG_PATH, serializeConfig(config));
+async function writeConfig(tasksDir: string, config: Config): Promise<void> {
+  await Bun.write(join(tasksDir, 'config.yaml'), serializeConfig(config));
 }
 
-// ─── D: Filesystem Initialization ────────────────────────────────────────────
-async function ensureTasksDir(): Promise<void> {
-  await mkdir(TASKS_DIR, { recursive: true });
+// ─── E: Filesystem Initialization ────────────────────────────────────────────
+async function ensureTasksDir(tasksDir: string): Promise<void> {
+  await mkdir(tasksDir, { recursive: true });
   for (const s of STATUS_FOLDERS) {
-    await mkdir(join(TASKS_DIR, s), { recursive: true });
+    await mkdir(join(tasksDir, s), { recursive: true });
   }
-  if (!(await Bun.file(CONFIG_PATH).exists())) {
-    await writeConfig({ id_prefix: 'TASK', id_counter: 1 });
+  if (!(await Bun.file(join(tasksDir, 'config.yaml')).exists())) {
+    await writeConfig(tasksDir, { id_prefix: 'TASK', id_counter: 1 });
   }
 }
 
-// ─── E: ID Generation ────────────────────────────────────────────────────────
-async function nextId(): Promise<string> {
-  const config = await readConfig();
+// ─── F: ID Generation ────────────────────────────────────────────────────────
+async function nextId(tasksDir: string): Promise<string> {
+  const config = await readConfig(tasksDir);
   const id = `${config.id_prefix}-${String(config.id_counter).padStart(3, '0')}`;
-  await writeConfig({ ...config, id_counter: config.id_counter + 1 });
+  await writeConfig(tasksDir, { ...config, id_counter: config.id_counter + 1 });
   return id;
 }
 
-// ─── F: Card Parse & Serialize ───────────────────────────────────────────────
+// ─── G: Card Parse & Serialize ───────────────────────────────────────────────
 function parseFrontmatter(text: string): Omit<Card, 'description' | 'comments'> {
   const map: Record<string, string> = {};
   for (const line of text.trim().split('\n')) {
@@ -163,9 +167,9 @@ function serializeCard(card: Card): string {
   return content + '\n';
 }
 
-async function findCard(id: string): Promise<{ card: Card; filePath: string }> {
+async function findCard(tasksDir: string, id: string): Promise<{ card: Card; filePath: string }> {
   for (const status of STATUS_FOLDERS) {
-    const filePath = join(TASKS_DIR, status, `${id}.md`);
+    const filePath = join(tasksDir, status, `${id}.md`);
     const file = Bun.file(filePath);
     if (await file.exists()) {
       return { card: parseCard(id, await file.text()), filePath };
@@ -174,13 +178,13 @@ async function findCard(id: string): Promise<{ card: Card; filePath: string }> {
   throw new Error(`Card not found: ${id}`);
 }
 
-// ─── G: CRUD Helpers ─────────────────────────────────────────────────────────
-async function writeCard(card: Card): Promise<void> {
-  await Bun.write(join(TASKS_DIR, card.status, `${card.id}.md`), serializeCard(card));
+// ─── H: CRUD Helpers ─────────────────────────────────────────────────────────
+async function writeCard(tasksDir: string, card: Card): Promise<void> {
+  await Bun.write(join(tasksDir, card.status, `${card.id}.md`), serializeCard(card));
 }
 
-async function listCardsInStatus(status: Status): Promise<Card[]> {
-  const dir = join(TASKS_DIR, status);
+async function listCardsInStatus(tasksDir: string, status: Status): Promise<Card[]> {
+  const dir = join(tasksDir, status);
   let files: string[];
   try {
     files = await readdir(dir);
@@ -197,21 +201,22 @@ async function listCardsInStatus(status: Status): Promise<Card[]> {
   return cards.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function listAllCards(): Promise<Card[]> {
+async function listAllCards(tasksDir: string): Promise<Card[]> {
   const all: Card[] = [];
   for (const status of STATUS_FOLDERS) {
-    all.push(...(await listCardsInStatus(status)));
+    all.push(...(await listCardsInStatus(tasksDir, status)));
   }
   return all;
 }
 
-// ─── H: MCP Tool Registrations ───────────────────────────────────────────────
+// ─── I: MCP Tool Registrations ───────────────────────────────────────────────
 
 server.registerTool(
   'create_card',
   {
     description: 'Create a new task card in the todo folder',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       title: z.string().describe('Card title (required)'),
       description: z.string().optional().describe('Card body/description in markdown'),
       due_date: z.string().optional().describe('Due date in ISO format YYYY-MM-DD'),
@@ -223,14 +228,15 @@ server.registerTool(
         ),
     },
   },
-  async ({ title, description, due_date, id: customId }) => {
-    await ensureTasksDir();
+  async ({ workspacePath, title, description, due_date, id: customId }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
 
     let id: string;
     if (customId) {
       // Validate that no card with this ID already exists in any status
       for (const status of STATUS_FOLDERS) {
-        const filePath = join(TASKS_DIR, status, `${customId}.md`);
+        const filePath = join(tasksDir, status, `${customId}.md`);
         if (await Bun.file(filePath).exists()) {
           return {
             content: [{ type: 'text', text: `Error: Card with ID "${customId}" already exists in status "${status}"` }],
@@ -239,7 +245,7 @@ server.registerTool(
       }
       id = customId;
     } else {
-      id = await nextId();
+      id = await nextId(tasksDir);
     }
 
     const now = new Date().toISOString();
@@ -253,7 +259,7 @@ server.registerTool(
       description: description ?? '',
       comments: [],
     };
-    await writeCard(card);
+    await writeCard(tasksDir, card);
     return { content: [{ type: 'text', text: `Created card ${id}: ${title}` }] };
   },
 );
@@ -263,12 +269,14 @@ server.registerTool(
   {
     description: 'List task cards, optionally filtered by status',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       status: z.enum(STATUS_FOLDERS).optional().describe('Filter by status. Omit to list all cards'),
     },
   },
-  async ({ status }) => {
-    await ensureTasksDir();
-    const cards = status ? await listCardsInStatus(status) : await listAllCards();
+  async ({ workspacePath, status }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
+    const cards = status ? await listCardsInStatus(tasksDir, status) : await listAllCards(tasksDir);
 
     if (cards.length === 0) {
       return { content: [{ type: 'text', text: 'No cards found' }] };
@@ -287,12 +295,14 @@ server.registerTool(
   {
     description: 'Get the full content of a task card by ID',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       id: z.string().describe('Card ID, e.g. TASK-001'),
     },
   },
-  async ({ id }) => {
-    await ensureTasksDir();
-    const { card } = await findCard(id);
+  async ({ workspacePath, id }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
+    const { card } = await findCard(tasksDir, id);
     return { content: [{ type: 'text', text: serializeCard(card) }] };
   },
 );
@@ -302,15 +312,17 @@ server.registerTool(
   {
     description: 'Update fields on an existing task card',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       id: z.string().describe('Card ID'),
       title: z.string().optional().describe('New title'),
       description: z.string().optional().describe('New description (replaces existing)'),
       due_date: z.string().optional().describe('New due date YYYY-MM-DD, or empty string to clear'),
     },
   },
-  async ({ id, title, description, due_date }) => {
-    await ensureTasksDir();
-    const { card, filePath } = await findCard(id);
+  async ({ workspacePath, id, title, description, due_date }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
+    const { card, filePath } = await findCard(tasksDir, id);
     const updated: Card = {
       ...card,
       title: title ?? card.title,
@@ -329,13 +341,15 @@ server.registerTool(
   {
     description: 'Move a task card to a different status folder',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       id: z.string().describe('Card ID'),
       status: z.enum(STATUS_FOLDERS).describe('Target status'),
     },
   },
-  async ({ id, status }) => {
-    await ensureTasksDir();
-    const { card, filePath } = await findCard(id);
+  async ({ workspacePath, id, status }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
+    const { card, filePath } = await findCard(tasksDir, id);
     if (card.status === status) {
       return {
         content: [{ type: 'text', text: `Card ${id} is already in ${status}` }],
@@ -346,7 +360,7 @@ server.registerTool(
       status,
       updated_at: new Date().toISOString(),
     };
-    const newFilePath = join(TASKS_DIR, status, `${id}.md`);
+    const newFilePath = join(tasksDir, status, `${id}.md`);
     // Write new file first, then delete old — data is never lost
     await Bun.write(newFilePath, serializeCard(updatedCard));
     await unlink(filePath);
@@ -359,13 +373,15 @@ server.registerTool(
   {
     description: 'Append a comment to an existing task card',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       id: z.string().describe('Card ID'),
       text: z.string().describe('Comment text (markdown supported)'),
     },
   },
-  async ({ id, text }) => {
-    await ensureTasksDir();
-    const { card, filePath } = await findCard(id);
+  async ({ workspacePath, id, text }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
+    const { card, filePath } = await findCard(tasksDir, id);
     const now = new Date();
     // Format as "YYYY-MM-DD HH:MM:SS" for human readability
     const timestamp = now.toISOString().replace('T', ' ').slice(0, 19);
@@ -384,12 +400,14 @@ server.registerTool(
   {
     description: 'Archive a task card (moves to archived/, does not permanently delete)',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       id: z.string().describe('Card ID to archive'),
     },
   },
-  async ({ id }) => {
-    await ensureTasksDir();
-    const { card, filePath } = await findCard(id);
+  async ({ workspacePath, id }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
+    const { card, filePath } = await findCard(tasksDir, id);
     if (card.status === 'archived') {
       return {
         content: [{ type: 'text', text: `Card ${id} is already archived` }],
@@ -400,7 +418,7 @@ server.registerTool(
       status: 'archived',
       updated_at: new Date().toISOString(),
     };
-    const newPath = join(TASKS_DIR, 'archived', `${id}.md`);
+    const newPath = join(tasksDir, 'archived', `${id}.md`);
     await Bun.write(newPath, serializeCard(archivedCard));
     await unlink(filePath);
     return { content: [{ type: 'text', text: `Card ${id} moved to archived` }] };
@@ -412,12 +430,14 @@ server.registerTool(
   {
     description: 'Search cards by matching a query string against title and description',
     inputSchema: {
+      workspacePath: z.string().describe('The current workspace absolute path'),
       query: z.string().describe('Search query (case-insensitive substring match)'),
     },
   },
-  async ({ query }) => {
-    await ensureTasksDir();
-    const all = await listAllCards();
+  async ({ workspacePath, query }) => {
+    const tasksDir = getTasksDir(workspacePath);
+    await ensureTasksDir(tasksDir);
+    const all = await listAllCards(tasksDir);
     const q = query.toLowerCase();
     const matches = all.filter((c) => c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q));
     if (matches.length === 0) {
@@ -430,13 +450,12 @@ server.registerTool(
   },
 );
 
-// ─── I: Startup ───────────────────────────────────────────────────────────────
+// ─── J: Startup ───────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  await ensureTasksDir();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('md-tasks MCP server running on stdio');
-  console.error(`Tasks directory: ${TASKS_DIR}`);
+  console.error(`Tasks folder name: ${TASKS_FOLDER}`);
 }
 
 main().catch((err) => {
